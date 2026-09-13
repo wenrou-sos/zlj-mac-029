@@ -6,11 +6,16 @@
 const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DB_PATH = path.join(__dirname, 'mro.db');
 const WASM_DIR = path.join(__dirname, 'node_modules', 'sql.js', 'dist');
 
 let real = null; // 初始化完成后的 Database 实例
+
+function hash(buf) {
+  return crypto.createHash('sha1').update(buf).digest('hex');
+}
 
 class Statement {
   constructor(db, sql) {
@@ -60,9 +65,33 @@ class Statement {
 }
 
 class Database {
-  constructor(sqlDb) {
+  constructor(SQL, sqlDb) {
+    this._SQL = SQL;
     this._db = sqlDb;
     this._txnDepth = 0;
+    this._lastHash = null;
+  }
+
+  /** 数据文件被外部修改（如运行期间执行 npm run seed）时，重新加载内存库 */
+  reloadIfChanged() {
+    if (this._txnDepth > 0) return; // 事务进行中不重载，下次事件再处理
+    let data;
+    try {
+      data = fs.readFileSync(DB_PATH);
+    } catch {
+      return;
+    }
+    if (hash(data) === this._lastHash) return; // 是自身落盘或无变化
+    try {
+      const fresh = new this._SQL.Database(data);
+      fresh.exec('PRAGMA foreign_keys = ON');
+      this._db.close();
+      this._db = fresh;
+      this._lastHash = hash(data);
+      console.log('🔄 检测到数据文件外部变更，已重新加载数据库');
+    } catch {
+      // 文件可能正在写入中，忽略本次，等待下一次变更事件
+    }
   }
 
   exec(sql) {
@@ -99,7 +128,11 @@ class Database {
 
   _persist() {
     if (this._txnDepth > 0) return; // 事务提交时统一落盘
-    fs.writeFileSync(DB_PATH, Buffer.from(this._db.export()));
+    const data = Buffer.from(this._db.export());
+    const tmp = DB_PATH + '.tmp';
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, DB_PATH); // 原子替换，避免并发读到半截文件
+    this._lastHash = hash(data);
   }
 }
 
@@ -196,10 +229,19 @@ async function initDb() {
     locateFile: (file) => path.join(WASM_DIR, file),
   });
   const existing = fs.existsSync(DB_PATH) ? fs.readFileSync(DB_PATH) : null;
-  real = new Database(existing ? new SQL.Database(existing) : new SQL.Database());
+  real = new Database(SQL, existing ? new SQL.Database(existing) : new SQL.Database());
   real._db.exec('PRAGMA foreign_keys = ON');
   real._db.exec(SCHEMA);
   real._persist();
+
+  // 监听数据文件的外部变更（如后端运行期间执行 npm run seed），自动热加载。
+  // 监听目录而非文件本身：_persist 用 rename 原子替换文件后，文件级 watch 会失效。
+  let watchTimer = null;
+  fs.watch(path.dirname(DB_PATH), { persistent: false }, (event, filename) => {
+    if (filename !== path.basename(DB_PATH)) return;
+    clearTimeout(watchTimer);
+    watchTimer = setTimeout(() => real.reloadIfChanged(), 80);
+  });
 }
 
 // 门面对象：路由层在 require 时即可拿到，调用时委托给已初始化的实例
@@ -216,4 +258,8 @@ function addLog(workCardId, actor, action, detail = '') {
   ).run(workCardId, actor, action, detail);
 }
 
-module.exports = { db, addLog, initDb };
+function reloadIfChanged() {
+  if (real) real.reloadIfChanged();
+}
+
+module.exports = { db, addLog, initDb, reloadIfChanged };

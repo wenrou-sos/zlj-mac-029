@@ -1,10 +1,17 @@
 const express = require('express');
 const cors = require('cors');
-const { db, initDb } = require('./db');
+const { db, initDb, reloadIfChanged } = require('./db');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// 每个请求前检查数据文件是否被外部更新（如 npm run seed），是则热加载，
+// 避免内存中的旧副本在下次落盘时覆盖外部变更
+app.use((req, res, next) => {
+  reloadIfChanged();
+  next();
+});
 
 app.use('/api/aircraft', require('./routes/aircraft'));
 app.use('/api/workcards', require('./routes/workcards'));

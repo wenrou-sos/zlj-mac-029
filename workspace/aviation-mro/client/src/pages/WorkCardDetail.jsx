@@ -54,8 +54,10 @@ export default function WorkCardDetail() {
             {card.status === '待派工' && (
               <button className="btn btn-primary" onClick={() => setModal('assign')}>👷 派工</button>
             )}
-            {card.status === '进行中' && (
-              <button className="btn btn-danger" onClick={() => setModal('hold')}>📦 缺件挂起</button>
+            {(card.status === '进行中' || card.status === '缺件挂起') && (
+              <button className="btn btn-danger" onClick={() => setModal('hold')}>
+                📦 {card.status === '缺件挂起' ? '追加缺件' : '缺件挂起'}
+              </button>
             )}
             {card.status === '待放行' && (
               <button className="btn btn-primary" onClick={() => setModal('release')}>✅ 放行确认</button>
@@ -208,6 +210,7 @@ export default function WorkCardDetail() {
       )}
       {modal === 'hold' && (
         <HoldModal
+          isAppend={card.status === '缺件挂起'}
           onClose={() => setModal(null)}
           onSubmit={(data) => act(() =>
             api.post(`/workcards/${card.id}/hold`, { ...data, operator: currentUser.name }))}
@@ -248,12 +251,16 @@ function AssignModal({ technicians, onClose, onSubmit }) {
   );
 }
 
-function HoldModal({ onClose, onSubmit }) {
+function HoldModal({ isAppend, onClose, onSubmit }) {
   const [form, setForm] = useState({ part_no: '', part_name: '', quantity: 1 });
   const valid = form.part_no.trim() && form.part_name.trim();
   return (
-    <Modal title="缺件挂起申请" onClose={onClose}>
-      <div className="alert alert-warn">挂起后工卡将暂停施工，航材到货确认后自动恢复。</div>
+    <Modal title={isAppend ? '追加缺件登记' : '缺件挂起申请'} onClose={onClose}>
+      <div className="alert alert-warn">
+        {isAppend
+          ? '工卡已处于缺件挂起状态，本次登记将追加一条缺件记录，全部航材到货后自动恢复施工。'
+          : '挂起后工卡将暂停施工，航材到货确认后自动恢复。'}
+      </div>
       <div className="form-row">
         <label>件号 *</label>
         <input value={form.part_no} placeholder="如 79-2100-A01"
@@ -271,7 +278,9 @@ function HoldModal({ onClose, onSubmit }) {
       </div>
       <div className="modal-actions">
         <button className="btn" onClick={onClose}>取消</button>
-        <button className="btn btn-danger" disabled={!valid} onClick={() => onSubmit(form)}>确认挂起</button>
+        <button className="btn btn-danger" disabled={!valid} onClick={() => onSubmit(form)}>
+          {isAppend ? '确认登记' : '确认挂起'}
+        </button>
       </div>
     </Modal>
   );

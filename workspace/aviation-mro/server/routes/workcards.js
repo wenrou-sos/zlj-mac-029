@@ -128,21 +128,27 @@ router.post('/:id/steps/:stepId/sign', (req, res) => {
   res.json(getCardFull(card.id));
 });
 
-// 缺件挂起
+// 缺件挂起（进行中）/ 追加缺件（已挂起）
 router.post('/:id/hold', (req, res) => {
   const { part_no, part_name, quantity, operator } = req.body;
   if (!part_no || !part_name) return res.status(400).json({ error: '件号和件名为必填项' });
   const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: '工卡不存在' });
-  if (card.status !== '进行中') return res.status(409).json({ error: `当前状态为「${card.status}」，不能挂起` });
+  if (card.status !== '进行中' && card.status !== '缺件挂起') {
+    return res.status(409).json({ error: `当前状态为「${card.status}」，不能登记缺件` });
+  }
 
   const tx = db.transaction(() => {
     db.prepare(`
       INSERT INTO parts_requests (work_card_id, part_no, part_name, quantity, requested_by)
       VALUES (?, ?, ?, ?, ?)
     `).run(card.id, part_no, part_name, quantity || 1, operator || '维修人员');
-    db.prepare("UPDATE work_cards SET status = '缺件挂起' WHERE id = ?").run(card.id);
-    addLog(card.id, operator || '维修人员', '缺件挂起', `${part_name}(${part_no}) × ${quantity || 1} 待航材`);
+    if (card.status === '进行中') {
+      db.prepare("UPDATE work_cards SET status = '缺件挂起' WHERE id = ?").run(card.id);
+      addLog(card.id, operator || '维修人员', '缺件挂起', `${part_name}(${part_no}) × ${quantity || 1} 待航材`);
+    } else {
+      addLog(card.id, operator || '维修人员', '追加缺件', `${part_name}(${part_no}) × ${quantity || 1} 待航材`);
+    }
   });
   tx();
   res.json(getCardFull(card.id));
