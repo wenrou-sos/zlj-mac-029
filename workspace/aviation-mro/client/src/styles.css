@@ -129,6 +129,7 @@ tr.clickable:hover td { background: #f8fafc; }
 .badge-red    { background: var(--red-bg); color: var(--red); }
 .badge-gray   { background: var(--gray-bg); color: var(--gray); }
 .badge-purple { background: var(--purple-bg); color: var(--purple); }
+.badge-dark   { background: #334155; color: #fff; }
 
 .btn {
   display: inline-flex; align-items: center; gap: 6px;

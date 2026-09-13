@@ -27,12 +27,12 @@ app.get('/api/dashboard', (req, res) => {
     FROM parts_requests p
     JOIN work_cards w ON w.id = p.work_card_id
     JOIN aircraft a ON a.id = w.aircraft_id
-    WHERE p.status = '待航材' ORDER BY p.requested_at
+    WHERE p.status = '待航材' AND w.status != '已作废' ORDER BY p.requested_at
   `).all();
   const urgentCards = db.prepare(`
     SELECT w.id, w.card_no, w.title, w.priority, w.status, w.due_date, a.registration
     FROM work_cards w JOIN aircraft a ON a.id = w.aircraft_id
-    WHERE w.status != '已放行' AND w.priority IN ('AOG', '加急')
+    WHERE w.status NOT IN ('已放行', '已作废') AND w.priority IN ('AOG', '加急')
     ORDER BY CASE w.priority WHEN 'AOG' THEN 0 ELSE 1 END, w.due_date
   `).all();
   const recentLogs = db.prepare(`

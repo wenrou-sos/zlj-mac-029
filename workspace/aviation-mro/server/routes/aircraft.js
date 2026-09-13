@@ -8,7 +8,7 @@ router.get('/', (req, res) => {
   const rows = db.prepare(`
     SELECT a.*,
       (SELECT COUNT(*) FROM work_cards w
-        WHERE w.aircraft_id = a.id AND w.status != '已放行') AS open_cards
+        WHERE w.aircraft_id = a.id AND w.status NOT IN ('已放行', '已作废')) AS open_cards
     FROM aircraft a ORDER BY a.registration
   `).all();
   res.json(rows);

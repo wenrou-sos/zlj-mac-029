@@ -5,7 +5,7 @@ import { StatusBadge, PriorityBadge } from '../components/Badges';
 import Modal from '../components/Modal';
 import { useCurrentUser } from '../App';
 
-const STATUSES = ['待派工', '进行中', '缺件挂起', '待放行', '已放行'];
+const STATUSES = ['待派工', '进行中', '缺件挂起', '待放行', '已放行', '已作废'];
 const TYPES = ['航线维修', '定检', '时控件更换', '故障排除', '改装'];
 
 export default function WorkCardList() {
@@ -44,7 +44,7 @@ export default function WorkCardList() {
       <div className="card">
         <div className="filters" style={{ marginBottom: 14 }}>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">全部状态</option>
+            <option value="">全部（不含已作废）</option>
             {STATUSES.map((s) => <option key={s}>{s}</option>)}
           </select>
           <select value={priority} onChange={(e) => setPriority(e.target.value)}>

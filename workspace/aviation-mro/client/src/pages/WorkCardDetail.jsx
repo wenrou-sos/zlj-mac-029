@@ -37,8 +37,10 @@ export default function WorkCardDetail() {
 
   const isAssignee = currentUser.id === card.assigned_to;
   const signedCount = card.steps.filter((s) => s.status === '已签署').length;
-  // 待放行 / 已放行 后步骤冻结，之前可追加、修改、删除未签署步骤
-  const canEditSteps = card.status !== '待放行' && card.status !== '已放行';
+  // 待放行 / 已放行 / 已作废 后步骤冻结，之前可追加、修改、删除未签署步骤
+  const canEditSteps = !['待放行', '已放行', '已作废'].includes(card.status);
+  const canVoid = card.status !== '已放行' && card.status !== '已作废';
+  const voidLog = card.status === '已作废' ? card.logs.find((l) => l.action === '作废') : null;
 
   const removeStep = (step) => {
     if (!window.confirm(`确认删除步骤${step.seq}「${step.content}」？`)) return;
@@ -71,6 +73,9 @@ export default function WorkCardDetail() {
             {card.status === '待放行' && (
               <button className="btn btn-primary" onClick={() => setModal('release')}>✅ 放行确认</button>
             )}
+            {canVoid && (
+              <button className="btn btn-danger" onClick={() => setModal('void')}>⛔ 作废</button>
+            )}
           </div>
         </div>
 
@@ -78,6 +83,12 @@ export default function WorkCardDetail() {
         {card.status === '缺件挂起' && (
           <div className="alert alert-warn" style={{ marginTop: 14 }}>
             ⏸ 工卡已因缺件挂起，航材到货确认后方可继续签署步骤。
+          </div>
+        )}
+        {card.status === '已作废' && (
+          <div className="alert alert-error" style={{ marginTop: 14 }}>
+            ⛔ 本工卡已作废{voidLog ? ` —— ${voidLog.detail}（${voidLog.actor}，${voidLog.created_at}）` : ''}。
+            记录保留仅供追溯，不能再执行任何操作。
           </div>
         )}
 
@@ -176,11 +187,14 @@ export default function WorkCardDetail() {
                       <td><StatusBadge value={p.status} /></td>
                       <td className="muted">{p.requested_at}</td>
                       <td>
-                        {p.status === '待航材' && (
+                        {p.status === '待航材' && card.status === '缺件挂起' && (
                           <button className="btn btn-sm"
                             onClick={() => act(() => api.post(`/workcards/${card.id}/parts/${p.id}/arrive`, { operator: currentUser.name }))}>
                             确认到货
                           </button>
+                        )}
+                        {p.status === '待航材' && card.status !== '缺件挂起' && (
+                          <span className="muted" style={{ fontSize: 12 }}>—</span>
                         )}
                         {p.status === '已到货' && <span className="muted" style={{ fontSize: 12 }}>{p.arrived_at}</span>}
                       </td>
@@ -261,6 +275,14 @@ export default function WorkCardDetail() {
             api.patch(`/workcards/${card.id}/steps/${editingStep.id}`, { ...data, operator: currentUser.name }))}
         />
       )}
+      {modal === 'void' && (
+        <VoidModal
+          currentUser={currentUser}
+          onClose={() => setModal(null)}
+          onSubmit={(reason) => act(() =>
+            api.post(`/workcards/${card.id}/void`, { reason, operator: currentUser.name }))}
+        />
+      )}
     </div>
   );
 }
@@ -318,6 +340,28 @@ function HoldModal({ isAppend, onClose, onSubmit }) {
         <button className="btn btn-danger" disabled={!valid} onClick={() => onSubmit(form)}>
           {isAppend ? '确认登记' : '确认挂起'}
         </button>
+      </div>
+    </Modal>
+  );
+}
+
+function VoidModal({ currentUser, onClose, onSubmit }) {
+  const [reason, setReason] = useState('');
+  return (
+    <Modal title="工卡作废" onClose={onClose}>
+      <div className="alert alert-warn">
+        作废后工卡退出在办清单，不能再派工、签署、到货或放行；缺件与签署记录保留可追溯。
+        操作人：{currentUser.name}
+      </div>
+      <div className="form-row">
+        <label>作废原因 *</label>
+        <textarea value={reason} placeholder="如：重复报卡 / 建卡选错飞机 / AOG 事后确认为虚警"
+          onChange={(e) => setReason(e.target.value)} />
+      </div>
+      <div className="modal-actions">
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn btn-danger" disabled={!reason.trim()}
+          onClick={() => onSubmit(reason)}>确认作废</button>
       </div>
     </Modal>
   );

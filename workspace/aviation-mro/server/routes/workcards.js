@@ -29,12 +29,13 @@ function getCardFull(id) {
   return card;
 }
 
-// 工卡列表，支持 ?status= &aircraft_id= &priority= 过滤
+// 工卡列表，支持 ?status= &aircraft_id= &priority= 过滤；默认不含已作废
 router.get('/', (req, res) => {
   const { status, aircraft_id, priority } = req.query;
   let sql = CARD_DETAIL_SQL + ' WHERE 1=1';
   const params = [];
   if (status) { sql += ' AND w.status = ?'; params.push(status); }
+  else { sql += " AND w.status != '已作废'"; } // 作废工卡退出在办清单，需显式查询
   if (aircraft_id) { sql += ' AND w.aircraft_id = ?'; params.push(aircraft_id); }
   if (priority) { sql += ' AND w.priority = ?'; params.push(priority); }
   sql += ' ORDER BY CASE w.priority WHEN \'AOG\' THEN 0 WHEN \'加急\' THEN 1 ELSE 2 END, w.due_date';
@@ -136,7 +137,7 @@ router.post('/:id/steps', (req, res) => {
   }
   const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: '工卡不存在' });
-  if (card.status === '待放行' || card.status === '已放行') {
+  if (['待放行', '已放行', '已作废'].includes(card.status)) {
     return res.status(409).json({ error: `当前状态为「${card.status}」，不能再追加步骤` });
   }
 
@@ -160,7 +161,7 @@ router.patch('/:id/steps/:stepId', (req, res) => {
   if (!content || !content.trim()) return res.status(400).json({ error: '步骤内容不能为空' });
   const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: '工卡不存在' });
-  if (card.status === '待放行' || card.status === '已放行') {
+  if (['待放行', '已放行', '已作废'].includes(card.status)) {
     return res.status(409).json({ error: `当前状态为「${card.status}」，不能修改步骤` });
   }
   const step = db.prepare('SELECT * FROM work_card_steps WHERE id = ? AND work_card_id = ?').get(req.params.stepId, card.id);
@@ -182,7 +183,7 @@ router.delete('/:id/steps/:stepId', (req, res) => {
   const operator = req.query.operator || '维修人员';
   const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: '工卡不存在' });
-  if (card.status === '待放行' || card.status === '已放行') {
+  if (['待放行', '已放行', '已作废'].includes(card.status)) {
     return res.status(409).json({ error: `当前状态为「${card.status}」，不能删除步骤` });
   }
   const step = db.prepare('SELECT * FROM work_card_steps WHERE id = ? AND work_card_id = ?').get(req.params.stepId, card.id);
@@ -239,11 +240,14 @@ router.post('/:id/hold', (req, res) => {
   res.json(getCardFull(card.id));
 });
 
-// 航材到货
+// 航材到货（仅缺件挂起状态可登记；已作废工卡的缺件记录仅作历史保留）
 router.post('/:id/parts/:partId/arrive', (req, res) => {
   const { operator } = req.body;
   const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
   if (!card) return res.status(404).json({ error: '工卡不存在' });
+  if (card.status !== '缺件挂起') {
+    return res.status(409).json({ error: `当前状态为「${card.status}」，不能登记到货` });
+  }
   const part = db.prepare('SELECT * FROM parts_requests WHERE id = ? AND work_card_id = ?').get(req.params.partId, card.id);
   if (!part) return res.status(404).json({ error: '缺件记录不存在' });
   if (part.status === '已到货') return res.status(409).json({ error: '该航材已到货' });
@@ -258,6 +262,33 @@ router.post('/:id/parts/:partId/arrive', (req, res) => {
       db.prepare("UPDATE work_cards SET status = '进行中' WHERE id = ?").run(card.id);
       addLog(card.id, '系统', '状态变更', '缺件全部到货，恢复施工');
     }
+  });
+  tx();
+  res.json(getCardFull(card.id));
+});
+
+// 工卡作废（带原因和操作人；已放行禁止作废）
+router.post('/:id/void', (req, res) => {
+  const { reason, operator } = req.body;
+  if (!reason || !reason.trim()) return res.status(400).json({ error: '作废原因为必填项' });
+  const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: '工卡不存在' });
+  if (card.status === '已放行') return res.status(409).json({ error: '已放行的工卡不能作废' });
+  if (card.status === '已作废') return res.status(409).json({ error: '工卡已作废，请勿重复操作' });
+
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE work_cards SET status = '已作废' WHERE id = ?").run(card.id);
+    addLog(card.id, operator || '生产控制', '作废', `作废原因：${reason.trim()}`);
+    // 与放行一致的飞机状态联动：无其他未关闭工卡则恢复在役
+    const openCards = db.prepare(
+      "SELECT COUNT(*) c FROM work_cards WHERE aircraft_id = ? AND status NOT IN ('已放行', '已作废')"
+    ).get(card.aircraft_id).c;
+    const ac = db.prepare('SELECT * FROM aircraft WHERE id = ?').get(card.aircraft_id);
+    if (openCards === 0 && ac.status !== '在役') {
+      db.prepare("UPDATE aircraft SET status = '在役' WHERE id = ?").run(card.aircraft_id);
+      addLog(card.id, '系统', '状态联动', `${ac.registration} 所有工卡关闭，恢复在役`);
+    }
+    // 缺件记录保留原状（待航材），作为历史追溯
   });
   tx();
   res.json(getCardFull(card.id));
@@ -289,7 +320,7 @@ router.post('/:id/release', (req, res) => {
     addLog(card.id, tech.name, '放行', remarks || '工卡放行，飞机适航');
     // 若该飞机无其他未关闭工卡且处于停场/定检状态，恢复在役
     const openCards = db.prepare(
-      "SELECT COUNT(*) c FROM work_cards WHERE aircraft_id = ? AND status != '已放行'"
+      "SELECT COUNT(*) c FROM work_cards WHERE aircraft_id = ? AND status NOT IN ('已放行', '已作废')"
     ).get(card.aircraft_id).c;
     const ac = db.prepare('SELECT * FROM aircraft WHERE id = ?').get(card.aircraft_id);
     if (openCards === 0 && ac.status !== '在役') {
