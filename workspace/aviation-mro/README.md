@@ -41,6 +41,7 @@ npm run client
 
 - 步骤必须按顺序签署，且仅被派工人可签署
 - 缺件挂起后禁止签署步骤；挂起期间可继续追加缺件登记，全部航材到货后自动恢复施工
+- 步骤动态管理：待派工/进行中/缺件挂起的工卡可追加步骤（排在末尾，按顺序签署）；未签署步骤可修改内容/依据标准或删除，删除后自动重排序号；已签署步骤冻结；追加的步骤同样须全部签署才能进入待放行
 - 放行校验：全部步骤已签署 + 无待航材缺件 + 放行人员资质（仅「放行人员」角色）
 - AOG 工卡创建时飞机自动转「停场维修」；飞机所有工卡关闭后自动恢复「在役」
 - 全部操作写入工卡日志时间线，可追溯
@@ -70,6 +71,9 @@ GET    /api/workcards                     工卡列表（?status=&priority=&airc
 POST   /api/workcards                     创建工卡（含步骤）
 GET    /api/workcards/:id                 工卡详情（步骤/缺件/放行/日志）
 POST   /api/workcards/:id/assign          派工
+POST   /api/workcards/:id/steps           追加步骤（待放行/已放行禁止）
+PATCH  /api/workcards/:id/steps/:sid      修改未签署步骤
+DELETE /api/workcards/:id/steps/:sid      删除未签署步骤（自动重排序号）
 POST   /api/workcards/:id/steps/:sid/sign 步骤签署
 POST   /api/workcards/:id/hold            缺件挂起
 POST   /api/workcards/:id/parts/:pid/arrive 航材到货

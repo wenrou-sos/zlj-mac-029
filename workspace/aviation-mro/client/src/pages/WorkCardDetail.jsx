@@ -11,7 +11,8 @@ export default function WorkCardDetail() {
   const [card, setCard] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [error, setError] = useState('');
-  const [modal, setModal] = useState(null); // assign | hold | release
+  const [modal, setModal] = useState(null); // assign | hold | release | append
+  const [editingStep, setEditingStep] = useState(null);
 
   const load = () => api.get(`/workcards/${id}`).then(setCard).catch((e) => setError(e.message));
   useEffect(() => {
@@ -24,6 +25,7 @@ export default function WorkCardDetail() {
     try {
       await fn();
       setModal(null);
+      setEditingStep(null);
       load();
     } catch (e) {
       setError(e.message);
@@ -35,6 +37,13 @@ export default function WorkCardDetail() {
 
   const isAssignee = currentUser.id === card.assigned_to;
   const signedCount = card.steps.filter((s) => s.status === '已签署').length;
+  // 待放行 / 已放行 后步骤冻结，之前可追加、修改、删除未签署步骤
+  const canEditSteps = card.status !== '待放行' && card.status !== '已放行';
+
+  const removeStep = (step) => {
+    if (!window.confirm(`确认删除步骤${step.seq}「${step.content}」？`)) return;
+    act(() => api.del(`/workcards/${card.id}/steps/${step.id}?operator=${encodeURIComponent(currentUser.name)}`));
+  };
 
   return (
     <div>
@@ -105,7 +114,12 @@ export default function WorkCardDetail() {
         <div>
           {/* 施工步骤 */}
           <div className="card">
-            <div className="card-title">📝 施工步骤签署</div>
+            <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>📝 施工步骤签署</span>
+              {canEditSteps && (
+                <button className="btn btn-sm" onClick={() => setModal('append')}>＋ 追加步骤</button>
+              )}
+            </div>
             {card.steps.map((s) => (
               <div className="step-row" key={s.id}>
                 <div className={`step-seq ${s.status === '已签署' ? 'done' : ''}`}>
@@ -118,16 +132,24 @@ export default function WorkCardDetail() {
                     <div className="step-sign">✍ {s.signer_name} 签署于 {s.signed_at}</div>
                   )}
                 </div>
-                {s.status === '待执行' && card.status === '进行中' && (
-                  <button
-                    className="btn btn-sm btn-primary"
-                    disabled={!isAssignee}
-                    title={isAssignee ? '' : '只有被派工人可签署'}
-                    onClick={() => act(() => api.post(`/workcards/${card.id}/steps/${s.id}/sign`, { technician_id: currentUser.id }))}
-                  >
-                    签署
-                  </button>
-                )}
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  {s.status === '待执行' && card.status === '进行中' && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      disabled={!isAssignee}
+                      title={isAssignee ? '' : '只有被派工人可签署'}
+                      onClick={() => act(() => api.post(`/workcards/${card.id}/steps/${s.id}/sign`, { technician_id: currentUser.id }))}
+                    >
+                      签署
+                    </button>
+                  )}
+                  {s.status === '待执行' && canEditSteps && (
+                    <>
+                      <button className="btn btn-sm" onClick={() => setEditingStep(s)}>修改</button>
+                      <button className="btn btn-sm btn-danger" onClick={() => removeStep(s)}>删除</button>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
             {card.status === '进行中' && !isAssignee && (
@@ -224,6 +246,21 @@ export default function WorkCardDetail() {
             api.post(`/workcards/${card.id}/release`, { technician_id: currentUser.id, remarks }))}
         />
       )}
+      {modal === 'append' && (
+        <AppendStepsModal
+          onClose={() => setModal(null)}
+          onSubmit={(steps) => act(() =>
+            api.post(`/workcards/${card.id}/steps`, { steps, operator: currentUser.name }))}
+        />
+      )}
+      {editingStep && (
+        <EditStepModal
+          step={editingStep}
+          onClose={() => setEditingStep(null)}
+          onSubmit={(data) => act(() =>
+            api.patch(`/workcards/${card.id}/steps/${editingStep.id}`, { ...data, operator: currentUser.name }))}
+        />
+      )}
     </div>
   );
 }
@@ -281,6 +318,76 @@ function HoldModal({ isAppend, onClose, onSubmit }) {
         <button className="btn btn-danger" disabled={!valid} onClick={() => onSubmit(form)}>
           {isAppend ? '确认登记' : '确认挂起'}
         </button>
+      </div>
+    </Modal>
+  );
+}
+
+function AppendStepsModal({ onClose, onSubmit }) {
+  const [steps, setSteps] = useState([{ content: '', standard: '' }]);
+  const [err, setErr] = useState('');
+
+  const setStep = (i, key, val) => {
+    const next = [...steps];
+    next[i] = { ...next[i], [key]: val };
+    setSteps(next);
+  };
+
+  const submit = () => {
+    const valid = steps.filter((s) => s.content.trim());
+    if (valid.length === 0) return setErr('请至少填写一个步骤内容');
+    onSubmit(valid);
+  };
+
+  return (
+    <Modal title="追加施工步骤" onClose={onClose}>
+      <div className="alert alert-info">
+        新步骤追加到末尾并按顺序签署；新增步骤全部签署完成后，工卡才能进入待放行。
+      </div>
+      {err && <div className="alert alert-error">{err}</div>}
+      <div className="form-row">
+        {steps.map((s, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <input style={{ flex: 3 }} placeholder="新步骤内容"
+              value={s.content} onChange={(e) => setStep(i, 'content', e.target.value)} />
+            <input style={{ flex: 2 }} placeholder="依据标准（如 AMM 章节）"
+              value={s.standard} onChange={(e) => setStep(i, 'standard', e.target.value)} />
+            <button className="btn btn-sm btn-danger" type="button"
+              onClick={() => setSteps(steps.filter((_, j) => j !== i))}
+              disabled={steps.length === 1}>删</button>
+          </div>
+        ))}
+        <button className="btn btn-sm" type="button"
+          onClick={() => setSteps([...steps, { content: '', standard: '' }])}>
+          ＋ 再添加一条
+        </button>
+      </div>
+      <div className="modal-actions">
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn btn-primary" onClick={submit}>确认追加</button>
+      </div>
+    </Modal>
+  );
+}
+
+function EditStepModal({ step, onClose, onSubmit }) {
+  const [content, setContent] = useState(step.content);
+  const [standard, setStandard] = useState(step.standard || '');
+  return (
+    <Modal title={`修改步骤 ${step.seq}`} onClose={onClose}>
+      <div className="form-row">
+        <label>步骤内容 *</label>
+        <textarea value={content} onChange={(e) => setContent(e.target.value)} />
+      </div>
+      <div className="form-row">
+        <label>依据标准</label>
+        <input value={standard} placeholder="如 AMM 32-21-00"
+          onChange={(e) => setStandard(e.target.value)} />
+      </div>
+      <div className="modal-actions">
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn btn-primary" disabled={!content.trim()}
+          onClick={() => onSubmit({ content, standard })}>保存修改</button>
       </div>
     </Modal>
   );

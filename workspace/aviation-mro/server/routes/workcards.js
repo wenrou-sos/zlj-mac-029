@@ -128,6 +128,91 @@ router.post('/:id/steps/:stepId/sign', (req, res) => {
   res.json(getCardFull(card.id));
 });
 
+// 追加步骤（待派工 / 进行中 / 缺件挂起 可追加；待放行、已放行禁止）
+router.post('/:id/steps', (req, res) => {
+  const { steps, operator } = req.body;
+  if (!Array.isArray(steps) || steps.length === 0 || steps.some((s) => !s.content || !s.content.trim())) {
+    return res.status(400).json({ error: '至少填写一个步骤内容' });
+  }
+  const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: '工卡不存在' });
+  if (card.status === '待放行' || card.status === '已放行') {
+    return res.status(409).json({ error: `当前状态为「${card.status}」，不能再追加步骤` });
+  }
+
+  const tx = db.transaction(() => {
+    const maxSeq = db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) m FROM work_card_steps WHERE work_card_id = ?'
+    ).get(card.id).m;
+    const ins = db.prepare('INSERT INTO work_card_steps (work_card_id, seq, content, standard) VALUES (?, ?, ?, ?)');
+    steps.forEach((s, i) => ins.run(card.id, maxSeq + i + 1, s.content.trim(), (s.standard || '').trim()));
+    const summary = steps.map((s) => s.content.trim()).join('；');
+    addLog(card.id, operator || '维修人员', '追加步骤', `新增 ${steps.length} 个步骤：${summary}`);
+    // 追加后必存在未签署步骤，工卡不可能处于待放行，无需状态联动
+  });
+  tx();
+  res.json(getCardFull(card.id));
+});
+
+// 修改未签署步骤（内容 / 依据标准）
+router.patch('/:id/steps/:stepId', (req, res) => {
+  const { content, standard, operator } = req.body;
+  if (!content || !content.trim()) return res.status(400).json({ error: '步骤内容不能为空' });
+  const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: '工卡不存在' });
+  if (card.status === '待放行' || card.status === '已放行') {
+    return res.status(409).json({ error: `当前状态为「${card.status}」，不能修改步骤` });
+  }
+  const step = db.prepare('SELECT * FROM work_card_steps WHERE id = ? AND work_card_id = ?').get(req.params.stepId, card.id);
+  if (!step) return res.status(404).json({ error: '步骤不存在' });
+  if (step.status === '已签署') return res.status(409).json({ error: `步骤${step.seq}已签署，不能修改` });
+
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE work_card_steps SET content = ?, standard = ? WHERE id = ?')
+      .run(content.trim(), (standard || '').trim(), step.id);
+    addLog(card.id, operator || '维修人员', '修改步骤',
+      `步骤${step.seq}：「${step.content}」→「${content.trim()}」`);
+  });
+  tx();
+  res.json(getCardFull(card.id));
+});
+
+// 删除未签署步骤（删除后剩余步骤重排序号）
+router.delete('/:id/steps/:stepId', (req, res) => {
+  const operator = req.query.operator || '维修人员';
+  const card = db.prepare('SELECT * FROM work_cards WHERE id = ?').get(req.params.id);
+  if (!card) return res.status(404).json({ error: '工卡不存在' });
+  if (card.status === '待放行' || card.status === '已放行') {
+    return res.status(409).json({ error: `当前状态为「${card.status}」，不能删除步骤` });
+  }
+  const step = db.prepare('SELECT * FROM work_card_steps WHERE id = ? AND work_card_id = ?').get(req.params.stepId, card.id);
+  if (!step) return res.status(404).json({ error: '步骤不存在' });
+  if (step.status === '已签署') return res.status(409).json({ error: `步骤${step.seq}已签署，不能删除` });
+  const total = db.prepare('SELECT COUNT(*) c FROM work_card_steps WHERE work_card_id = ?').get(card.id).c;
+  if (total <= 1) return res.status(409).json({ error: '工卡至少保留一个步骤，不能删除' });
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM work_card_steps WHERE id = ?').run(step.id);
+    // 剩余步骤按原顺序重排为 1..n
+    const rest = db.prepare('SELECT id FROM work_card_steps WHERE work_card_id = ? ORDER BY seq').all(card.id);
+    const upd = db.prepare('UPDATE work_card_steps SET seq = ? WHERE id = ?');
+    rest.forEach((r, i) => upd.run(i + 1, r.id));
+    addLog(card.id, operator, '删除步骤', `删除步骤${step.seq}：${step.content}`);
+    // 若删除后进行中工卡的全部步骤均已签署，转入待放行
+    if (card.status === '进行中') {
+      const remaining = db.prepare(
+        "SELECT COUNT(*) c FROM work_card_steps WHERE work_card_id = ? AND status = '待执行'"
+      ).get(card.id).c;
+      if (remaining === 0) {
+        db.prepare("UPDATE work_cards SET status = '待放行' WHERE id = ?").run(card.id);
+        addLog(card.id, '系统', '状态变更', '全部步骤签署完成，转入待放行');
+      }
+    }
+  });
+  tx();
+  res.json(getCardFull(card.id));
+});
+
 // 缺件挂起（进行中）/ 追加缺件（已挂起）
 router.post('/:id/hold', (req, res) => {
   const { part_no, part_name, quantity, operator } = req.body;
