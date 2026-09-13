@@ -1,0 +1,4 @@
+node_modules/
+dist/
+server/mro.db
+*.log

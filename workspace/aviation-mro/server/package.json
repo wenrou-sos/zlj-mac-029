@@ -1,0 +1,17 @@
+{
+  "name": "aviation-mro-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "航空机务维修管理系统 - 后端服务",
+  "main": "index.js",
+  "scripts": {
+    "seed": "node seed.js",
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "sql.js": "^1.13.0"
+  }
+}

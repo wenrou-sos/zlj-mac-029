@@ -1,0 +1,13 @@
+{
+  "name": "aviation-mro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "航空机务维修管理系统（React + Express + SQLite）",
+  "scripts": {
+    "setup": "cd server && npm install && cd ../client && npm install",
+    "seed": "cd server && node seed.js",
+    "server": "cd server && node index.js",
+    "client": "cd client && npm run dev",
+    "build": "cd client && npm run build"
+  }
+}
